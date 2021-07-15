@@ -1,0 +1,217 @@
+---
+title: "Mask Usage"
+author: "Trevor Brewer"
+date: "3/22/2021"
+output: html_document
+---
+
+
+```{r,include=F}
+#load libraries necessary for the code
+library(dplyr)
+library(R0)
+library(ggplot2)
+library(tidyr)
+library(car)
+```
+
+
+# Initial Thoughts 
+```{r}
+## load in the data files 
+## 
+## these are local saves and would need to be updated 
+##
+
+sorted <- read.csv('C:/Users/Trevor/Desktop/UK Semester 2/Data Science Competition/USCountyCovid19-2021-03-172.csv')
+mask <- read.csv('C:/Users/Trevor/Desktop/UK Semester 2/Data Science Competition/MaskUseCovid19-2021-03-17.csv')
+```
+
+### Average Daily Spread by County
+```{r}
+## clean county data
+##
+## fips numbers are county identifiers
+## 
+
+fips <- sorted$fips
+u.fips <- unique(fips)
+#remove na
+u.fips <- u.fips[!is.na(u.fips)]
+```
+
+```{r}
+## calculate average spread 
+##
+## for each county fip, average the daily increases
+## to be a measure of the spread of COVID-19
+##
+
+#create skeleton data frame to be filled
+d.frame <- data.frame(matrix(nrow=1,ncol = 2))
+colnames(d.frame) <- c('COUNTYFP','R')
+
+#loop through list of counties
+i <- 1
+for (fip in u.fips){
+  
+  data <- filter(sorted,fips==fip)
+  data$date <- as.Date(data$date,format = '%m/%d/%Y')
+  df <- numeric(length(data$cases)-1)
+  for (j in 2:length(data$cases)){
+    df[j-1] <- (data$cases[j])/(data$cases[j-1])
+  }
+  df<- df[df!=0]
+  #avg spread
+  r.est <- mean(df)
+  d.frame[i,1] <- fip
+  d.frame[i,2] <- r.est
+  i <- i+1
+  # #to gauge the time; prints out every 100th count
+  # if(i%%100==0){
+  #   print(i)
+  # }
+}
+```
+
+```{r}
+## merge the data frames
+##
+## find where the files overlap and create a final data frame with
+## complete data
+##
+
+common.fip <- intersect(mask$COUNTYFP,d.frame$COUNTYFP)
+#where mask data overlaps
+mask.y <- mask[match(common.fip,mask$COUNTYFP),]
+#where reproduction number data overlaps
+d.frame.y <- d.frame[match(common.fip,d.frame$COUNTYFP),]
+#merge
+mask.final <- merge(mask.y,d.frame.y,by="COUNTYFP")
+```
+
+### Create Models on Average Daily Spread
+```{r}
+## creation of explanatory variables
+##
+## combine survey results to reduce multicolinearity
+## create squared variables
+## 
+
+mask.final$Wear <- mask.final$FREQUENTLY + mask.final$ALWAYS
+mask.final$W2 <- I(mask.final$Wear^2)
+mask.final$Notwear <- mask.final$RARELY + mask.final$NEVER
+mask.final$N2 <- I(mask.final$Notwear^2)
+#possible log transformation
+mask.final$logR <- log(mask.final$R)
+#remove when avg daily spread is infinite
+mask.final <- mask.final[!is.infinite(mask.final$R),]
+```
+
+```{r}
+## create models with quadratic term
+##
+## print model summary and residual plots
+##
+
+modw <- lm(data=mask.final,R~Wear+W2)
+summary(modw)
+plot(modw$residuals~modw$fitted.values,ylab = "Residuals",xlab = "Fitted Values",
+     main = "Residual Plot for R0~Wear+Wear^2",pch=20)
+abline(h=0,col="red")
+
+modn <- lm(data=mask.final,R~Notwear+N2)
+summary(modn)
+plot(modn$residuals~modn$fitted.values,ylab = "Residuals",xlab = "Fitted Values",
+     main = "Residual Plot for R0~Notwear+Notwear^2",pch=20)
+abline(h=0,col="red")
+```
+
+```{r}
+## create model for single order explanatory terms
+##
+## print model summary and plot residuals
+##
+
+modw <- lm(data=mask.final,R~Wear)
+summary(modw)
+plot(modw$residuals~modw$fitted.values,ylab = "Residuals",xlab = "Fitted Values",
+     main = "Residual Plot for R0~Wear+Wear^2",pch=20)
+abline(h=0,col="red")
+
+modn <- lm(data=mask.final,R~Notwear)
+summary(modn)
+plot(modn$residuals~modn$fitted.values,ylab = "Residuals",xlab = "Fitted Values",
+     main = "Residual Plot for R0~Notwear+Notwear^2",pch=20)
+abline(h=0,col="red")
+```
+
+### Diagnostics
+```{r}
+## Check residuals
+##
+## Are residuals distributed normally for each variable?
+##
+
+residualPlots(modw)
+residualPlots(modn)
+```
+
+```{r}
+## plot data and regression line
+##
+## 
+##
+
+par(mfrow=c(1,2))
+plot(y=mask.final$R, x=mask.final$Wear+mask.final$W2,ylab = "Avg Daily Increase",
+     xlab="Wear + (Wear)^2",pch=20)
+x1<-sort(mask.final$Wear+mask.final$W2)
+y1<-modw$fitted.values[order(mask.final$Wear+mask.final$W2)]
+lines(x1, y1,col="red",lwd=2)
+plot(y=mask.final$R, x=mask.final$Notwear+mask.final$N2,ylab = "Avg Daily Increase",
+     xlab="Not Wear + (Not Wear)^2",pch=20)
+x2<-sort(mask.final$Notwear+mask.final$N2)
+y2<-modn$fitted.values[order(mask.final$Notwear+mask.final$N2)]
+lines(x2, y2,col="red",lwd=2)
+
+```
+
+```{r}
+## plot histograms
+##
+## 
+##
+
+hist(mask.final$R,breaks=30,xlim=c(1,1.1),xlab = "Mean Daily Increase",
+     main = "Histogram of Mean Daily Increases")
+abline(v=mean(mask.final$R),col="red")
+text(x=mean(mask.final$R),y=500,paste("Mean = ",round(mean(mask.final$R),3)),pos=4)
+
+hist(mask.final$Wear,xlab = "Percentage that answered FREQUENTLY or ALWAYS",main = "Histogram of Variable 'Wear'")
+abline(v=mean(mask.final$Wear),col="red")
+text(x=mean(mask.final$Wear)-.01,y=420,paste("Mean = ",round(mean(mask.final$Wear),3)),pos=2)
+
+hist(mask.final$Notwear,xlab = "Percentage that answered RARELY or NEVER",main = "Histogram of Variable 'Not Wear'")
+abline(v=mean(mask.final$Notwear),col="red")
+text(x=mean(mask.final$Notwear)-.01,y=600,paste("Mean = ",round(mean(mask.final$Notwear),3)),pos=4)
+```
+
+```{r}
+## model on log transformed data
+##
+##
+## 
+
+mod.mean <- lm(data=mask.final,log(Wear+1)~R)
+summary(mod.mean)
+plot(mod.mean$residuals~mod.mean$fitted.values,ylab = "Residuals",xlab = "Fitted Values",
+     main = "Residual Plot for Wear~R",pch=20)
+abline(h=0,col="red")
+```
+```{r}
+plot(y=mask.final$Wear, x=mask.final$R,ylab = "Wear",
+     xlab="R",pch=20)
+abline(mod.mean)
+```
+
